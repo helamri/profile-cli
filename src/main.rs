@@ -1,16 +1,18 @@
 use clap::{Parser, Subcommand};
 use serde::{Serialize, Deserialize};
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::collections::HashMap;
 
-const DB_FILE: &str = "profiles.db";
+const DB_FILE: &str = "kvstore.db";
 
-/// Main CLI application
+/// Universal Key-Value storage (binary based)
 #[derive(Parser)]
-#[command(author = "Helamri",
-          version = "1.0",
-          about = "A simple local binary profile manager",
-          long_about = None)]
+#[command(
+    author = "Helamri",
+    version = "1.0",
+    about = "A simple binary Key-Value store",
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -18,107 +20,108 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Add a new profile to the local binary database.
-    ///
-    /// Usage:
-    ///   profile-cli add "Hamza" 23
-    Add {
-        /// Profile name
-        name: String,
 
-        /// Profile age
-        age: u32,
+    /// Store a key with associated data (as binary)
+    ///
+    /// Example:
+    ///   store-cli set username "Hamza"
+    Set {
+        /// Key name
+        key: String,
+
+        /// Value as string (will be stored as bytes)
+        value: String,
     },
 
-    /// List all saved profiles.
+    /// Get a stored value by key
     ///
-    /// Usage:
-    ///   profile-cli list
+    /// Example:
+    ///   store-cli get username
+    Get {
+        /// Key to retrieve
+        key: String,
+    },
+
+    /// List all stored keys
     List,
 
-    /// Delete a profile by index.  
-    /// Use `list` to see available indices.
-    ///
-    /// Usage:
-    ///   profile-cli delete 1
+    /// Delete a specific key
     Delete {
-        /// The index of the profile to delete
-        index: usize,
+        key: String,
     },
 
-    /// Reset the entire database (delete all profiles).
-    ///
-    /// Usage:
-    ///   profile-cli reset
-    ///
-    /// Warning:
-    ///   This action cannot be undone.
+    /// Reset the database
     Reset,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Profile {
-    name: String,
-    age: u32,
+struct KVStore {
+    data: HashMap<String, Vec<u8>>,
 }
 
-/// Load the profiles from binary file
-fn load_profiles() -> Vec<Profile> {
+/// Load the database from file
+fn load_db() -> KVStore {
     if let Ok(mut file) = File::open(DB_FILE) {
         let mut buffer = Vec::new();
         if file.read_to_end(&mut buffer).is_ok() {
-            if let Ok(profiles) = bincode::deserialize::<Vec<Profile>>(&buffer) {
-                return profiles;
+            if let Ok(decoded) = bincode::deserialize::<KVStore>(&buffer) {
+                return decoded;
             }
         }
     }
-    Vec::new()
+
+    KVStore {
+        data: HashMap::new(),
+    }
 }
 
-/// Save profiles to binary file
-fn save_profiles(profiles: &Vec<Profile>) -> io::Result<()> {
-    let encoded = bincode::serialize(profiles).unwrap();
-    let mut file = File::create(DB_FILE)?;
-    file.write_all(&encoded)?;
-    Ok(())
+/// Save the database to file
+fn save_db(db: &KVStore) {
+    let encoded = bincode::serialize(db).unwrap();
+    let mut file = File::create(DB_FILE).unwrap();
+    file.write_all(&encoded).unwrap();
 }
 
 fn main() {
     let cli = Cli::parse();
-    let mut profiles = load_profiles();
+    let mut db = load_db();
 
     match cli.command {
-        Commands::Add { name, age } => {
-            profiles.push(Profile { name, age });
-            save_profiles(&profiles).unwrap();
-            println!("Profile added successfully!");
+        Commands::Set { key, value } => {
+            db.data.insert(key.clone(), value.into_bytes());
+            save_db(&db);
+            println!("Stored key '{}'", key);
         }
 
-        Commands::List => {
-            if profiles.is_empty() {
-                println!("No profiles found.");
+        Commands::Get { key } => {
+            if let Some(v) = db.data.get(&key) {
+                let as_text = String::from_utf8_lossy(v);
+                println!("{} = {}", key, as_text);
             } else {
-                println!("Saved profiles:");
-                for (i, p) in profiles.iter().enumerate() {
-                    println!("{} — Name: {}, Age: {}", i, p.name, p.age);
-                }
+                println!("Key not found");
             }
         }
 
-        Commands::Delete { index } => {
-            if index < profiles.len() {
-                profiles.remove(index);
-                save_profiles(&profiles).unwrap();
-                println!("Profile deleted successfully.");
+        Commands::List => {
+            println!("Stored keys:");
+            for key in db.data.keys() {
+                println!("- {}", key);
+            }
+        }
+
+        Commands::Delete { key } => {
+            if db.data.remove(&key).is_some() {
+                save_db(&db);
+                println!("Deleted key '{}'", key);
             } else {
-                println!("Invalid index.");
+                println!("Key not found");
             }
         }
 
         Commands::Reset => {
-            profiles.clear();
-            save_profiles(&profiles).unwrap();
-            println!("All profiles deleted.");
+            db.data.clear();
+            save_db(&db);
+            println!("Database cleared");
         }
     }
 }
